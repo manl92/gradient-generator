@@ -86,7 +86,10 @@
   }
 
   .swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
-  .swatch { position: relative; width: 40px; height: 40px; }
+  .swatch { position: relative; width: 40px; height: 40px; cursor: grab; }
+  .swatch:active { cursor: grabbing; }
+  .swatch.dragging { opacity: 0.35; }
+  .swatch.drag-over .swatch__btn { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent) 60%, transparent); }
   .swatch__btn {
     width: 100%; height: 100%; padding: 0; cursor: pointer;
     border: 1px solid var(--border); border-radius: 9px;
@@ -94,6 +97,27 @@
     transition: border-color 140ms ease, transform 120ms cubic-bezier(0.22,1,0.36,1);
   }
   .swatch__btn:hover { border-color: var(--accent); transform: translateY(-1px); }
+
+  /* Tooltip */
+  #tip-global {
+    position: fixed; z-index: 300; max-width: 190px;
+    padding: 6px 10px; pointer-events: none;
+    background: oklch(0.13 0.02 255); border: 1px solid var(--border);
+    border-radius: 8px; font-size: 0.71rem; line-height: 1.45;
+    color: var(--ink); box-shadow: 0 4px 18px rgba(0,0,0,0.45);
+    opacity: 0; transition: opacity 100ms ease;
+    white-space: normal;
+  }
+  #tip-global.show { opacity: 1; }
+  .tip-icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 13px; height: 13px; border-radius: 50%;
+    border: 1px solid var(--muted); color: var(--muted);
+    font-size: 0.58rem; font-style: normal; margin-left: 5px;
+    cursor: default; flex-shrink: 0; vertical-align: middle;
+    transition: border-color 120ms, color 120ms;
+  }
+  .tip-icon:hover { border-color: var(--accent); color: var(--accent); }
   .swatch__rm {
     position: absolute; top: -6px; right: -6px;
     width: 18px; height: 18px; border-radius: 50%;
@@ -1003,15 +1027,15 @@ const LOOP_PARAMS = [
   { key: 'speed',  label: 'Speed',      min: 0.02, max: 3,  step: 0.01 },
 ];
 const BLEND_PARAMS = [
-  { key: 'softness', label: 'Mixing softness', min: 0.05, max: 0.6,  step: 0.01  },
-  { key: 'grain',    label: 'Grain',           min: 0,    max: 0.35, step: 0.005 },
-  { key: 'flow',     label: 'Flow',            min: 0,    max: 0.12, step: 0.005 },
+  { key: 'softness', label: 'Mixing softness', min: 0.05, max: 0.6,  step: 0.01,  tip: 'How sharply colors blend at their edges. Low = hard, distinct regions. High = smooth, wide transitions.' },
+  { key: 'grain',    label: 'Grain',           min: 0,    max: 0.35, step: 0.005, tip: 'Film grain texture intensity. Adds noise to break up digital flatness.' },
+  { key: 'flow',     label: 'Flow',            min: 0,    max: 0.12, step: 0.005, tip: 'Fluid warp amount. Pushes the color field with a sine-field drift for an organic, living feel.' },
 ];
 const MOTION_PARAMS = [
-  { key: 'freqA',  label: 'Frequency A', min: 1,   max: 9,    step: 1    },
-  { key: 'freqB',  label: 'Frequency B', min: 1,   max: 9,    step: 1    },
-  { key: 'phase',  label: 'Phase',       min: 0,   max: 6.28, step: 0.01 },
-  { key: 'spread', label: 'Spread',      min: 0.2, max: 2,    step: 0.05 },
+  { key: 'freqA',  label: 'Frequency A', min: 1,   max: 9,    step: 1,    tip: 'Horizontal oscillation cycles in the color path. Pair with Freq B to create woven knot shapes.' },
+  { key: 'freqB',  label: 'Frequency B', min: 1,   max: 9,    step: 1,    tip: 'Vertical oscillation cycles. When Freq A ≠ Freq B, you get a Lissajous knot. Same value = circle.' },
+  { key: 'phase',  label: 'Phase',       min: 0,   max: 6.28, step: 0.01, tip: 'Angle offset between the two axes. ~1.57 (π/2) gives a circular path; other values tilt and stretch it.' },
+  { key: 'spread', label: 'Spread',      min: 0.2, max: 2,    step: 0.05, tip: 'How far apart color blobs are spaced along the path. Higher values = more separation between hues.' },
 ];
 const ALL_PARAMS = [...LOOP_PARAMS, ...BLEND_PARAMS, ...MOTION_PARAMS];
 const FRAME_AFFECTING = new Set(['length']);   // only fps * length changes the frame count
@@ -1020,15 +1044,41 @@ function fmtVal(item, v) {
   return item.step < 1 ? Number(v).toFixed(item.step < 0.01 ? 3 : 2) : String(v);
 }
 
+// Tooltip helpers
+const _tipEl = () => document.getElementById('tip-global');
+function showTip(text, e) {
+  const el = _tipEl(); if (!el) return;
+  el.textContent = text;
+  el.classList.add('show');
+  _moveTip(e);
+}
+function hideTip() { const el = _tipEl(); if (el) el.classList.remove('show'); }
+function _moveTip(e) {
+  const el = _tipEl(); if (!el || !el.classList.contains('show')) return;
+  let x = e.clientX + 14, y = e.clientY + 10;
+  if (x + 200 > window.innerWidth) x = e.clientX - 204;
+  if (y + 80 > window.innerHeight) y = e.clientY - 70;
+  el.style.left = x + 'px'; el.style.top = y + 'px';
+}
+document.addEventListener('mousemove', _moveTip);
+
 function buildSliders(params, mountId) {
   const root = document.getElementById(mountId);
   for (const item of params) {
     const wrap = document.createElement('div');
     wrap.className = 'ctl';
     wrap.id = 'ctl_' + item.key;
+    const tipHtml = item.tip
+      ? `<i class="tip-icon">i</i>`
+      : '';
     wrap.innerHTML =
-      `<div class="ctl__row"><span class="ctl__label">${item.label}</span>` +
+      `<div class="ctl__row"><span class="ctl__label">${item.label}${tipHtml}</span>` +
       `<span class="ctl__val" id="v_${item.key}">${fmtVal(item, S[item.key])}</span></div>`;
+    if (item.tip) {
+      const icon = wrap.querySelector('.tip-icon');
+      icon.addEventListener('mouseenter', e => showTip(item.tip, e));
+      icon.addEventListener('mouseleave', hideTip);
+    }
     const inp = document.createElement('input');
     inp.type = 'range'; inp.id = 'sl_' + item.key;
     inp.min = item.min; inp.max = item.max; inp.step = item.step; inp.value = S[item.key];
@@ -1246,6 +1296,8 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeColorPi
 // ===========================================================================
 //  Colour swatches
 // ===========================================================================
+let _dragSrc = null;
+
 function renderSwatches() {
   closeColorPicker();   // indices may shift; avoid a stale binding
   const root = document.getElementById('swatches');
@@ -1253,6 +1305,23 @@ function renderSwatches() {
   S.colors.forEach((col, idx) => {
     const sw = document.createElement('div');
     sw.className = 'swatch';
+    sw.draggable = true;
+    sw.addEventListener('dragstart', e => {
+      _dragSrc = idx;
+      e.dataTransfer.effectAllowed = 'move';
+      requestAnimationFrame(() => sw.classList.add('dragging'));
+    });
+    sw.addEventListener('dragend', () => sw.classList.remove('dragging'));
+    sw.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; sw.classList.add('drag-over'); });
+    sw.addEventListener('dragleave', () => sw.classList.remove('drag-over'));
+    sw.addEventListener('drop', e => {
+      e.preventDefault();
+      sw.classList.remove('drag-over');
+      if (_dragSrc === null || _dragSrc === idx) return;
+      [S.colors[_dragSrc], S.colors[idx]] = [S.colors[idx], S.colors[_dragSrc]];
+      _dragSrc = null;
+      renderSwatches();
+    });
     const btn = document.createElement('button');
     btn.className = 'swatch__btn';
     btn.dataset.idx = idx;
@@ -1442,5 +1511,6 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   }
 });
 </script>
+<div id="tip-global"></div>
 </body>
 </html>
